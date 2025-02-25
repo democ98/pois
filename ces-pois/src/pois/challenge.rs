@@ -1,3 +1,4 @@
+use super::verify::Verifier;
 use crate::expanders::{self, generate_idle_file::get_hash};
 
 pub fn new_challenge_handle(

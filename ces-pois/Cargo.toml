@@ -19,6 +19,8 @@ prost = { workspace = true }
 rand = { workspace = true }
 rsa = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
 sha2 = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 sysinfo = { workspace = true }
+async-trait = { workspace = true }

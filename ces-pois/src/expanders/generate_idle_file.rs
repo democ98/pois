@@ -1,10 +1,17 @@
-use std::path;
+use std::{
+    fmt::format,
+    path::{self, Path},
+    vec,
+};
 
-use super::Expanders;
-use crate::tree::{self, LightMHT};
+use super::{generate_expanders::calc_parents, get_bytes, Expanders, Node, NodeType};
+use crate::{
+    tree::{self, LightMHT},
+    util,
+};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256, Sha512};
-use tokio::fs;
+use tokio::{fs, io::AsyncReadExt};
 
 pub const DEFAULT_IDLE_FILES_PATH: &str = "./proofs";
 pub const FILE_NAME: &str = "sub-file";
@@ -82,11 +89,172 @@ impl Expanders {
 
         // Number of idle files in each file cluster
         let file_num = self.k;
+        //create aux slices
         let mut roots = vec![vec![0, 0]; (self.k + file_num) as usize * size as usize + 1];
-        let elders = self.file_pool.clone();
-        let parents = self.file_pool.clone();
-        let labels = self.file_pool.clone();
-        let mht = tree::get_light_mht(self.n);
+        let mut elders = self.file_pool.clone();
+        let mut parents = self.file_pool.clone();
+        let mut labels = self.file_pool.clone();
+        let mut mht = tree::get_light_mht(self.n);
+
+        let mut aux = vec![0u8; (DEFAULT_AUX_SIZE * tree::DEFAULT_HASH_SIZE as i64) as usize];
+
+        //calc node labels
+        let front_size = miner_id.len() + std::mem::size_of::<NodeType>() + 8 + 8;
+        let mut label = vec![0u8; front_size + 2 * HASH_SIZE as usize];
+        util::copy_data(&mut label, &[&miner_id]);
+        // let node = Node::default();
+
+        for i in 0..(self.k + file_num) {
+            let mut logical_layer = i;
+            for j in 0..size {
+                util::copy_data(
+                    &mut label[miner_id.len()..],
+                    &[&get_bytes(clusters[j as usize]), &get_bytes(0 as i64)],
+                );
+                //calc nodes relationship
+                //read parents' label of file j, and fill elder node labels to add files relationship
+                if i > self.k {
+                    logical_layer = self.k;
+                    //When the last level is reached, join the file index
+                    util::copy_data(
+                        &mut label[miner_id.len() + 8..],
+                        &[&get_bytes((clusters[j as usize] - 1) * file_num + i - self.k + 1)],
+                    );
+                    self.read_elders_data(&set_dir, i, j, &mut elders, &clusters).await?;
+                }
+
+                if i > 0 {
+                    fs::File::open(
+                        &path::Path::new(&set_dir)
+                            .join(format!("{}-{}", CLUSTER_DIR_NAME, clusters[j as usize]))
+                            .join(format!("{}-{}", FILE_NAME, logical_layer - 1)),
+                    )
+                    .await?
+                    .read_to_end(&mut parents)
+                    .await
+                    .context("generate idle file error")?;
+                }
+
+                for k in 0..self.k {
+                    util::copy_data(
+                        &mut label[miner_id.len() + 8 + 8..],
+                        &[&get_bytes((logical_layer * self.n + k) as NodeType)],
+                    );
+                    util::clear_data(&mut label[front_size..]);
+                    let node = self.calc_nodes_parents(i, &miner_id, clusters[j as usize], k);
+                    if i > 0 && !node.no_parents() {
+                        for p in node.parents.iter() {
+                            let idx = *p as i64 - self.n;
+                            let l = idx * HASH_SIZE as i64;
+                            let r = (idx + 1) * HASH_SIZE as i64;
+                            if (*p as i64) < logical_layer * self.n {
+                                util::add_data(
+                                    &mut label[front_size..front_size + HASH_SIZE as usize],
+                                    &[&parents[l as usize..r as usize]],
+                                );
+                            } else {
+                                let label_tmp = label.clone()[l as usize..r as usize].to_vec();
+                                util::add_data(
+                                    &mut label[front_size..front_size + HASH_SIZE as usize],
+                                    &[&label_tmp[l as usize..r as usize]],
+                                );
+                            }
+                        }
+                        // //add files relationship
+                        if i >= self.k {
+                            util::add_data(
+                                &mut label[front_size + HASH_SIZE as usize..front_size + 2 * HASH_SIZE as usize],
+                                &[&elders[(k * HASH_SIZE as i64) as usize..((k + 1) * HASH_SIZE as i64) as usize]],
+                            );
+                        }
+                    }
+                    let mut hash_raw_data = label.clone();
+                    if i + j > 0 {
+                        //add same layer dependency relationship
+                        hash_raw_data.extend_from_slice(
+                            &labels[(k * HASH_SIZE as i64) as usize..((k + 1) * HASH_SIZE as i64) as usize],
+                        );
+                    };
+                    labels[(k * HASH_SIZE as i64) as usize..((k + 1) * HASH_SIZE as i64) as usize]
+                        .copy_from_slice(&get_hash(&hash_raw_data));
+                }
+
+                //calc merkel tree root hash
+                tree::calc_light_mht_with_bytes(&mut mht, &label, HASH_SIZE as i64);
+                roots[(i * size + j) as usize] = tree::get_root(&mht);
+                aux.copy_from_slice(
+                    &mht[DEFAULT_AUX_SIZE as usize * tree::DEFAULT_HASH_SIZE as usize
+                        ..2 * DEFAULT_AUX_SIZE as usize * tree::DEFAULT_HASH_SIZE as usize],
+                );
+
+                //save aux data
+                util::save_file(
+                    &Path::new(set_dir.as_str())
+                        .join(format!("{}-{}", CLUSTER_DIR_NAME, clusters[j as usize]))
+                        .join(format!("{}-{}", AUX_FILE, i)),
+                    &aux,
+                )?;
+
+                //save one layer labels of one file
+                util::save_file(
+                    &Path::new(set_dir.as_str())
+                        .join(format!("{}-{}", CLUSTER_DIR_NAME, clusters[j as usize]))
+                        .join(format!("{}-{}", FILE_NAME, i)),
+                    &label,
+                )?;
+            }
+        }
+        //return memory space
+        drop(parents);
+        drop(labels);
+        drop(elders);
+        drop(mht);
+        //calculate new dir name
+        let mut hasher = Sha256::new();
+        for i in 0..roots.len() - 1 {
+            hasher.update(&roots[i])
+        }
+        roots[((self.k + file_num) * size) as usize] = hasher.finalize().to_vec();
+
+        util::save_proof_file(&Path::new(set_dir.as_str()).join(COMMIT_FILE), &roots)?;
+
+        Ok(())
+    }
+
+    pub fn calc_nodes_parents(&self, layer: i64, miner_id: &[u8], count: i64, j: i64) -> Node {
+        let logical_layer = if layer >= self.k { self.k } else { layer };
+
+        let mut node = self.nodes_pool.clone();
+        node.index = (j + logical_layer * self.n) as NodeType;
+        node.parents.clear();
+
+        calc_parents(self, &mut node, miner_id, count, layer);
+        node
+    }
+
+    pub async fn read_elders_data(
+        &self,
+        set_dir: &str,
+        layer: i64,
+        cidx: i64,
+        elders: &mut Vec<u8>,
+        clusters: &[i64],
+    ) -> Result<()> {
+        let base_layer = ((layer - self.k / 2) / self.k) as usize;
+        util::clear_data(elders);
+        let mut temp = self.file_pool.clone();
+        for l in 0..(self.k / 2) as usize {
+            fs::File::open(
+                &path::Path::new(set_dir)
+                    .join(format!("{}-{}", CLUSTER_DIR_NAME, clusters[cidx as usize]))
+                    .join(format!("{}-{}", FILE_NAME, base_layer + 2 * l)),
+            )
+            .await?
+            .read_to_end(&mut temp)
+            .await?;
+
+            util::add_data(elders, &[&temp]);
+        }
 
         Ok(())
     }

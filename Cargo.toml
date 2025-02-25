@@ -22,8 +22,10 @@ prost = { version = "0.11", default-features = false, features = [
 rand = "0.8.5"
 rsa = { version = "0.8", default-features = false }
 serde = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 tokio = { version = "1.41.1" }
 sysinfo = { version = "0.24.0" }
+async-trait = "0.1"
 
 ces-pois = { path = "ces-pois" }

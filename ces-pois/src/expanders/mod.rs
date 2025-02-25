@@ -6,7 +6,6 @@ use generate_idle_file::HASH_SIZE;
 use num_bigint_dig::BigInt;
 use num_traits::{Signed, ToPrimitive};
 
-pub use generate_idle_file::new_hash;
 pub type NodeType = i32;
 
 #[derive(Clone, Debug)]
@@ -20,7 +19,7 @@ pub struct Expanders {
     pub nodes_pool: Node,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Node {
     pub index: NodeType,
     pub parents: Vec<NodeType>,
