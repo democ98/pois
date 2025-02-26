@@ -19,7 +19,7 @@ pub const DEFAULT_BACKUP_NAME: &str = "sub-acc";
 
 #[async_trait]
 pub trait AccHandle {
-    async fn get_snapshot(&mut self);
+    async fn get_snapshot(&mut self) -> Arc<RwLock<MutiLevelAcc>>;
 
     async fn add_elements_and_proof(&mut self, elems: Vec<Vec<u8>>) -> Result<(WitnessNode, Vec<Vec<u8>>)>;
 
@@ -57,6 +57,7 @@ pub struct WitnessNode {
     pub acc: Option<Box<WitnessNode>>,
 }
 
+#[derive(Clone, Debug)]
 pub struct MutiLevelAcc {
     pub accs: Option<Arc<RwLock<AccNode>>>,
     pub key: RsaKey,
@@ -128,29 +129,18 @@ pub async fn new_muti_level_acc(path: &str, key: RsaKey) -> Result<MutiLevelAcc>
 
 #[async_trait]
 impl AccHandle for MutiLevelAcc {
-    async fn get_snapshot(&mut self) {
+    async fn get_snapshot(&mut self) -> Arc<RwLock<MutiLevelAcc>> {
         if self.snapshot.is_none() {
             self.create_snap_shot().await;
         };
+        self.snapshot.clone().unwrap()
     }
 
     // AddElementsAndProof adds elements to muti-level acc and create proof of added elements
     async fn add_elements_and_proof(&mut self, elems: Vec<Vec<u8>>) -> Result<(WitnessNode, Vec<Vec<u8>>)> {
-        self.get_snapshot().await;
+        let snapshot = self.get_snapshot().await;
         let mut exist = WitnessNode {
-            elem: self
-                .snapshot
-                .clone()
-                .unwrap()
-                .read()
-                .await
-                .accs
-                .clone()
-                .unwrap()
-                .read()
-                .await
-                .value
-                .clone(),
+            elem: snapshot.read().await.accs.clone().unwrap().read().await.value.clone(),
             ..Default::default()
         };
 
@@ -228,7 +218,7 @@ impl AccHandle for MutiLevelAcc {
             })),
         };
 
-        self.get_snapshot().await;
+        let snapshot = self.get_snapshot().await;
 
         self.delete_elements(num).await.context("prove acc deletion proof error")?;
 
@@ -236,7 +226,7 @@ impl AccHandle for MutiLevelAcc {
         accs[DEFAULT_LEVEL as usize - 1] = self.accs.clone().unwrap().read().await.value.clone();
         let mut count = 1;
         let mut p = self.accs.clone();
-        let mut q = self.snapshot.clone().unwrap().read().await.accs.clone();
+        let mut q = snapshot.read().await.accs.clone();
         while p.is_some() && q.is_some() && count < DEFAULT_LEVEL as usize {
             if p.clone().unwrap().read().await.len < q.clone().unwrap().read().await.len {
                 for i in (DEFAULT_LEVEL as usize - count - 1)..=0 {
@@ -256,8 +246,7 @@ impl AccHandle for MutiLevelAcc {
     // get witness chains for prove space challenge
     async fn get_witness_chains(&mut self, indexes: Vec<i64>) -> Result<Vec<WitnessNode>> {
         let mut data = AccData::default();
-        self.get_snapshot();
-        let snapshot = self.snapshot.clone().unwrap();
+        let snapshot = self.get_snapshot().await;
         let mut chains = Vec::new();
         let mut fidx = -1;
 

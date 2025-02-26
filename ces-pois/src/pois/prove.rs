@@ -1,6 +1,6 @@
 use crate::{
     acc::{
-        file_manager::backup_acc_data_for_chall,
+        file_manager::*,
         multi_level_acc::{
             new_muti_level_acc, recovery, AccHandle, MutiLevelAcc, WitnessNode, DEFAULT_ELEMS_NUM, DEFAULT_PATH,
         },
@@ -9,15 +9,20 @@ use crate::{
     expanders::{
         self,
         generate_expanders::{self, construct_stacked_expanders},
-        generate_idle_file::{AUX_FILE, COMMIT_FILE, DEFAULT_AUX_SIZE, FILE_NAME, HASH_SIZE, SET_DIR_NAME},
+        generate_idle_file::{
+            AUX_FILE, CLUSTER_DIR_NAME, COMMIT_FILE, DEFAULT_AUX_SIZE, FILE_NAME, HASH_SIZE, SET_DIR_NAME,
+        },
         Node, NodeType,
     },
+    pois::prove,
     tree::{self, get_path_proof, PathProof, DEFAULT_HASH_SIZE},
     util,
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext, Result};
+use num_bigint_dig::BigUint;
+use rsa::rand_core::block;
 use serde::{Deserialize, Serialize};
-use std::{os::fd, path::Path, sync::Mutex};
+use std::{path::Path, sync::Arc, vec};
 use tokio::{fs, sync::RwLock};
 
 const FILE_SIZE: i64 = HASH_SIZE as i64;
@@ -28,9 +33,10 @@ const MAXPROOFTHREAD: i64 = 4;
 const MINIFILESIZE: i64 = 1024 * 1024;
 
 pub struct Prover<T: AccHandle> {
-    pub rw: RwLock<ProverBody<T>>,
+    pub rw: Arc<RwLock<ProverBody<T>>>,
 }
 
+#[derive(Clone)]
 pub struct ProverBody<T: AccHandle> {
     pub expanders: expanders::Expanders,
     pub rear: i64,
@@ -66,6 +72,7 @@ impl Default for Config {
     }
 }
 
+#[derive(Clone)]
 struct Context {
     pub commited: i64,
     pub added: i64,
@@ -73,6 +80,7 @@ struct Context {
     pub proofed: i64,
 }
 
+#[derive(Clone)]
 pub struct ChainState<T: AccHandle> {
     pub acc: Option<T>,
     pub challenging: bool,
@@ -152,7 +160,7 @@ pub async fn new_prover<T: AccHandle>(
         config: Config::default(),
     };
 
-    Ok(Prover { rw: RwLock::new(prover) })
+    Ok(Prover { rw: Arc::new(RwLock::new(prover)) })
 }
 
 impl Prover<MutiLevelAcc> {
@@ -211,6 +219,53 @@ impl Prover<MutiLevelAcc> {
         Ok(())
     }
 
+    pub async fn set_challenge_state(&mut self, key: RsaKey, acc_snp: Vec<u8>, front: i64, rear: i64) -> Result<()> {
+        let mut prover_guard = self.rw.write().await;
+
+        prover_guard.chain_state.rear = rear;
+        prover_guard.chain_state.front = front;
+
+        let chain_acc = BigUint::from_bytes_be(&acc_snp);
+
+        prover_guard.chain_state.acc = Some(
+            recovery(CHALL_ACC_PATH, key, front, rear)
+                .await
+                .context("recovery chain state error")?,
+        );
+
+        let local_acc = BigUint::from_bytes_be(
+            &prover_guard
+                .chain_state
+                .acc
+                .as_mut()
+                .ok_or_else(|| anyhow!("Accumulator manager is not initialized."))?
+                .get_snapshot()
+                .await
+                .read()
+                .await
+                .accs
+                .as_ref()
+                .unwrap()
+                .read()
+                .await
+                .value
+                .clone(),
+        );
+
+        if chain_acc != local_acc {
+            bail!("recovery chain state error:The restored accumulator value is not equal to the snapshot value");
+        }
+
+        prover_guard.chain_state.challenging = true;
+        // prover_guard.chain_state.del_ch = None;
+
+        Ok(())
+    }
+
+    pub async fn set_challenge_state_for_test(&mut self, front: i64, rear: i64) {
+        self.rw.write().await.chain_state = ChainState { acc: None, challenging: false, rear, front };
+    }
+
     // GenerateIdleFileSet generate num=(p.setLen*p.clusterSize(==k)) idle files, num must be consistent with the data given by CESS, otherwise it cannot pass the verification
     // This method is not thread-safe, please do not use it concurrently!
     pub async fn generate_idle_file_set(&mut self) -> Result<()> {
@@ -255,69 +310,234 @@ impl Prover<MutiLevelAcc> {
         Ok(())
     }
 
-    pub async fn calc_generated_file(&mut self, dir: &str) -> Result<i64> {
-        let mut count = 0_i64;
-        let prover_guard = self.rw.read().await;
-        let file_total_size =
-            prover_guard.config.file_size * (prover_guard.expanders.k + prover_guard.cluster_size) * 1024 * 1024;
-        let root_size = (prover_guard.set_len * (prover_guard.expanders.k + prover_guard.cluster_size) + 1)
-            * (DEFAULT_HASH_SIZE as i64);
-        let mut next = 1_i64;
+    pub async fn generate_idle_file_sets(&mut self, t_num: i64) -> Result<()> {
+        let mut prover_guard = self.rw.write().await;
+        let mut t_num = t_num;
 
-        let mut files = fs::read_dir(dir).await?;
-        while let Some(file) = files.next_entry().await? {
-            let file_name = file
-                .file_name()
-                .into_string()
-                .map_err(|_| anyhow!("failed to convert file name to string"))?;
-            let sidxs = file_name.split("-").collect::<Vec<&str>>();
-            if sidxs.len() < 3 {
-                continue;
-            }
-            let number: i64 = sidxs[2].parse()?;
-            if number != prover_guard.rear / (prover_guard.set_len * prover_guard.cluster_size) + next {
-                continue;
-            }
-            if !file.file_type().await?.is_dir() {
-                continue;
-            }
-            let roots_file = file.path().join(COMMIT_FILE);
-            match fs::metadata(roots_file).await {
-                Ok(metadata) => {
-                    if metadata.len() != root_size as u64 {
-                        continue;
-                    }
-                },
-                Err(_) => continue,
-            }
-
-            let mut clusters = fs::read_dir(file.path()).await?;
-            let mut i = 0;
-            while let Some(cluster) = clusters.next_entry().await? {
-                if !cluster.metadata().await?.is_dir() {
-                    continue;
-                }
-
-                let mut size = 0;
-                let mut files = fs::read_dir(cluster.path()).await?;
-
-                while let Some(file) = files.next_entry().await? {
-                    if !file.metadata().await?.is_dir() && file.metadata().await?.len() >= MINIFILESIZE as u64 {
-                        size += file.metadata().await?.len() as i64;
-                    }
-                }
-                if size == file_total_size {
-                    count += prover_guard.cluster_size;
-                    i += 1;
-                }
-            }
-            if i == prover_guard.set_len as usize {
-                next += 1;
-            }
+        if t_num <= 0 {
+            bail!("generate idle file sets error: bad thread number");
         }
-        Ok(count)
+
+        // Get available space
+        let free_space = util::get_dir_free_space(IDLE_FILE_PATH)? / (1024 * 1024); // MB
+        let reserved = 256_i64;
+
+        let file_num = prover_guard.set_len * prover_guard.cluster_size;
+
+        if prover_guard.space == file_num * FILE_SIZE
+            && free_space > (prover_guard.expanders.k * FILE_SIZE + reserved) as u64
+        {
+            prover_guard.space += prover_guard.expanders.k * FILE_SIZE;
+        }
+
+        if prover_guard.space < (file_num + prover_guard.set_len * prover_guard.expanders.k) * FILE_SIZE * t_num {
+            if prover_guard.space >= (file_num + prover_guard.set_len * prover_guard.expanders.k) * FILE_SIZE {
+                t_num = 1;
+            } else {
+                bail!("generate idle file sets error: space is full");
+            }
+        };
+
+        let curr_index = prover_guard.context.added / prover_guard.cluster_size + 1;
+        prover_guard.context.added += file_num * t_num;
+        prover_guard.space -= (file_num + prover_guard.set_len * prover_guard.expanders.k) * FILE_SIZE * t_num;
+
+        let mut tasks = Vec::new();
+
+        for i in 0..t_num {
+            let start = curr_index + i * prover_guard.set_len;
+            let mut prover_guard = prover_guard.clone();
+
+            let task = tokio::task::spawn(async move {
+                prover_guard
+                    .expanders
+                    .generate_idle_file_set(prover_guard.id.clone(), start, prover_guard.set_len, IDLE_FILE_PATH)
+                    .await
+            });
+            tasks.push(task);
+        }
+
+        // Wait for all tasks to finish
+        for (i, task) in tasks.into_iter().enumerate() {
+            task.await.context("spawn taks failed")??;
+        }
+
+        prover_guard.context.generated += file_num * t_num;
+        Ok(())
     }
 
+    // CommitRollback need to be invoked when submit commits to verifier failure
+    pub async fn commit_roll_back(&mut self) -> bool {
+        let mut prover_guard = self.rw.write().await;
+        prover_guard.context.commited -= prover_guard.set_len * prover_guard.cluster_size;
+        true
+    }
+
+    // AccRollback need to be invoked when submit or verify acc proof failure,
+    // the update of the accumulator is serial and blocking, you need to update or roll back in time.
+    pub async fn acc_roll_back(&mut self, is_del: bool) -> bool {
+        let mut prover_guard = self.rw.write().await;
+
+        if !is_del {
+            prover_guard.context.commited -= prover_guard.set_len * prover_guard.cluster_size;
+        };
+
+        prover_guard.acc_manager.as_mut().unwrap().rollback().await
+    }
+
+    pub async fn sync_chain_pois_status(&mut self, front: i64, rear: i64) -> Result<()> {
+        let mut prover_guard = self.rw.write().await;
+        if prover_guard.front == front && prover_guard.rear == rear {
+            return Ok(());
+        };
+
+        prover_guard.acc_manager = Some(
+            recovery(
+                ACC_PATH,
+                prover_guard
+                    .acc_manager
+                    .as_mut()
+                    .unwrap()
+                    .get_snapshot()
+                    .await
+                    .read()
+                    .await
+                    .key
+                    .clone(),
+                front,
+                rear,
+            )
+            .await
+            .context("reflash acc error")?,
+        );
+        //recovery front and rear
+        prover_guard.front = front;
+        prover_guard.rear = rear;
+        prover_guard.context.commited = rear;
+
+        Ok(())
+    }
+
+    // UpdateStatus need to be invoked after verify commit proof and acc proof success,
+    // the update of the accumulator is serial and blocking, you need to update or roll back in time.
+    pub async fn update_status(&mut self, num: i64, is_delete: bool) -> Result<()> {
+        if num < 0 {
+            bail!("bad files number");
+        }
+
+        let mut prover_guard = self.rw.write().await;
+
+        if is_delete {
+            prover_guard.front += num;
+            prover_guard.acc_manager.as_mut().unwrap().update_snapshot().await;
+
+            let index = (prover_guard.front - 1) / DEFAULT_ELEMS_NUM as i64;
+            if let Err(err) = clean_backup(ACC_PATH, index) {
+                bail!("delete idle files error: {}", err);
+            }
+            return Ok(());
+        }
+
+        prover_guard.rear += num;
+        prover_guard.acc_manager.as_mut().unwrap().update_snapshot().await;
+        let rear = prover_guard.rear;
+        let front = prover_guard.front;
+        drop(prover_guard);
+
+        if let Err(err) = self.organize_files(rear - num, num).await {
+            bail!("update prover status error: {}", err);
+        }
+
+        for i in ((front + num - 1) / num) * num..rear - num {
+            if let Err(err) = self.organize_files(i, num).await {
+                bail!("update prover status error: {}", err);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn get_space(&self) -> i64 {
+        self.rw.read().await.space
+    }
+
+    pub async fn return_space(&mut self, size: i64) {
+        self.rw.write().await.space += size;
+    }
+
+    pub async fn get_acc_value(&self) -> Vec<u8> {
+        let key_len = 256;
+
+        let acc = self
+            .rw
+            .write()
+            .await
+            .acc_manager
+            .clone()
+            .unwrap()
+            .get_snapshot()
+            .await
+            .read()
+            .await
+            .accs
+            .clone()
+            .unwrap()
+            .read()
+            .await
+            .value
+            .clone();
+        let mut res = vec![0_u8; key_len];
+        if acc.len() > key_len {
+            res.copy_from_slice(&acc[acc.len() - 256..]);
+            return res;
+        }
+        res[256 - acc.len()..].copy_from_slice(&acc);
+        return res;
+    }
+
+    // GetCount get Count Safely
+    pub async fn get_rear(&self) -> i64 {
+        self.rw.read().await.rear
+    }
+
+    pub async fn get_front(&self) -> i64 {
+        self.rw.read().await.front
+    }
+
+    pub async fn get_num_of_file_in_set(&self) -> i64 {
+        self.rw.read().await.set_len * self.rw.read().await.cluster_size
+    }
+
+    pub async fn commit_data_is_ready(&self) -> bool {
+        let file_num = self.rw.read().await.context.generated;
+        let commited = self.rw.read().await.context.commited;
+        return file_num - commited >= self.rw.read().await.set_len * self.rw.read().await.cluster_size;
+    }
+
+    pub async fn get_chain_state(&self) -> ChainState<MutiLevelAcc> {
+        let prover_guard = self.rw.read().await;
+        ChainState {
+            rear: prover_guard.chain_state.rear,
+            front: prover_guard.chain_state.front,
+            acc: prover_guard.chain_state.acc.clone(),
+            challenging: false,
+        }
+    }
+
+    // RestChallengeState must be called when space proof is finished
+    pub async fn rest_challenge_state(&mut self) {
+        let mut prover_guard = self.rw.write().await;
+
+        prover_guard.context.proofed = 0;
+        // prover_guard.chain_state.del_ch = None;
+        prover_guard.chain_state.challenging = false;
+
+        if prover_guard.chain_state.front >= DEFAULT_ELEMS_NUM as i64 {
+            let index = (prover_guard.chain_state.front - DEFAULT_ELEMS_NUM as i64) / DEFAULT_ELEMS_NUM as i64;
+            let _ = delete_acc_data(CHALL_ACC_PATH, index as i32);
+        };
+    }
+
+    // GetIdleFileSetCommits can not run concurrently! And num must be consistent with the data given by CESS.
     pub async fn get_idle_file_set_commits(&mut self) -> Result<Commits> {
         let mut commits = Commits::default();
         let mut prover_guard = self.rw.write().await;
@@ -412,18 +632,26 @@ impl Prover<MutiLevelAcc> {
         Ok(Some(proof))
     }
 
-    pub async fn read_file_labels(&self, cluster: i64, fidx: i64, buf: Vec<u8>) -> Result<()> {
-        todo!()
+    pub async fn read_file_labels(&self, cluster: i64, fidx: i64, buf: &mut Vec<u8>) -> Result<()> {
+        let file_name = Path::new(IDLE_FILE_PATH)
+            .join(format!("{}-{}", SET_DIR_NAME, (cluster - 1) / self.rw.read().await.set_len + 1))
+            .join(format!("{}-{}", CLUSTER_DIR_NAME, cluster))
+            .join(format!("{}-{}", FILE_NAME, fidx + self.rw.read().await.expanders.k));
+
+        util::read_file_to_buf(&file_name, buf).context("read file labels error")
     }
 
-    pub async fn read_aux_data(&self, cluster: i64, fidx: i64, buf: Vec<u8>) -> Result<()> {
-        todo!()
+    pub async fn read_aux_data(&self, cluster: i64, fidx: i64, buf: &mut Vec<u8>) -> Result<()> {
+        let file_name = Path::new(IDLE_FILE_PATH)
+            .join(format!("{}-{}", SET_DIR_NAME, (cluster - 1) / self.rw.read().await.set_len + 1))
+            .join(format!("{}-{}", CLUSTER_DIR_NAME, cluster))
+            .join(format!("{}-{}", AUX_FILE, fidx + self.rw.read().await.expanders.k));
+
+        util::read_file_to_buf(&file_name, buf).context("read aux data error")
     }
 
     // ProveCommit prove commits no more than MaxCommitProofThread
     pub async fn prove_commits(&self, challenges: Vec<Vec<i64>>) -> Result<Option<Vec<Vec<CommitProof>>>> {
-        let neighbor = Path::new(IDLE_FILE_PATH);
-
         let lens = challenges.len();
         let mut proof_set: Vec<Vec<CommitProof>> = vec![Vec::new(); lens];
         let prover_guard = self.rw.read().await;
@@ -445,12 +673,12 @@ impl Prover<MutiLevelAcc> {
                 if j < prover_guard.cluster_size + 1 {
                     layer = prover_guard.expanders.k + j - 1;
                 }
-                if layer != 0 || i != 0 {
+                let neighbor = if layer != 0 || i != 0 {
                     let mut cid = challenges[i][0] - 1;
                     if cid % prover_guard.set_len == 0 {
                         cid += prover_guard.set_len;
                     }
-                    neighbor
+                    let path_buf = Path::new(IDLE_FILE_PATH)
                         .join(format!(
                             "{}-{}",
                             expanders::generate_idle_file::SET_DIR_NAME,
@@ -462,9 +690,12 @@ impl Prover<MutiLevelAcc> {
                             expanders::generate_idle_file::FILE_NAME,
                             layer - (prover_guard.set_len - i as i64) / prover_guard.set_len
                         ));
-                }
+                    path_buf
+                } else {
+                    Path::new(IDLE_FILE_PATH).to_path_buf()
+                };
                 proofs[j as usize - 1] = self
-                    .generate_commit_proof(&fdir, neighbor, challenges[i][0], index, layer)
+                    .generate_commit_proof(&fdir, neighbor.as_path(), challenges[i][0], index, layer)
                     .await?;
             }
             proof_set[i] = proofs;
@@ -617,4 +848,304 @@ impl Prover<MutiLevelAcc> {
         proof.parents = parent_proofs;
         Ok(proof)
     }
+
+    pub async fn prove_space(&self, challenges: Vec<i64>, left: i64, right: i64) -> Result<Arc<RwLock<SpaceProof>>> {
+        if challenges.is_empty()
+            || right - left <= 0
+            || left <= self.rw.read().await.chain_state.front
+            || right > self.rw.read().await.chain_state.rear + 1
+        {
+            bail!("prove space error:bad challenge range");
+        }
+
+        let proof = Arc::new(RwLock::new(SpaceProof {
+            proofs: vec![vec![]; (right - left) as usize],
+            roots: vec![vec![]; (right - left) as usize],
+            wit_chains: vec![WitnessNode::default(); (right - left) as usize],
+            left,
+            right,
+        }));
+
+        let indexs = Arc::new(RwLock::new(vec![0; (right - left) as usize]));
+        let mut threads = MAXPROOFTHREAD;
+        if right - left < threads {
+            threads = right - left;
+        }
+        if threads <= 0 {
+            threads = 2;
+        }
+        let block = ((right - left) / threads) * threads;
+
+        let mut tasks = Vec::new();
+        for i in 0..threads {
+            let gl = left + i * block;
+            let mut gr = left + (i + 1) * block;
+            if gr > right {
+                gr = right;
+            }
+
+            let p = self.rw.clone();
+            let proof_clone = proof.clone();
+            let challenges = challenges.clone();
+            let indexs = indexs.clone();
+
+            let task = tokio::spawn(async move {
+                let p = Prover { rw: p };
+                for fidx in gl..gr {
+                    let mut data = p.rw.read().await.expanders.file_pool.clone();
+
+                    if let Err(e) = p
+                        .read_file_labels(
+                            ((fidx - 1) / p.rw.read().await.cluster_size) + 1,
+                            (fidx - 1) % p.rw.read().await.cluster_size,
+                            &mut data,
+                        )
+                        .await
+                    {
+                        return Err(e);
+                    }
+
+                    let mut aux = vec![0u8; DEFAULT_AUX_SIZE as usize * tree::DEFAULT_HASH_SIZE as usize];
+                    if let Err(e) = p
+                        .read_aux_data(
+                            ((fidx - 1) / p.rw.read().await.cluster_size) + 1,
+                            (fidx - 1) % p.rw.read().await.cluster_size,
+                            &mut aux,
+                        )
+                        .await
+                    {
+                        return Err(e);
+                    }
+
+                    let mut mht = tree::get_light_mht(DEFAULT_AUX_SIZE);
+                    tree::calc_light_mht_with_aux(&mut mht, &aux);
+
+                    indexs.write().await[(fidx - left) as usize] = fidx;
+
+                    let mut proof_guard = proof_clone.write().await;
+                    proof_guard.roots[(fidx - left) as usize] = tree::get_root(&mht);
+                    proof_guard.proofs[(fidx - left) as usize] = vec![];
+
+                    for (j, challenge) in challenges.clone().into_iter().enumerate() {
+                        let idx = (challenge % p.rw.read().await.expanders.n) as usize;
+
+                        let path_proof = tree::get_path_proof_with_aux(&mut data, &mut aux, idx, HASH_SIZE as usize)?;
+                        let mut label = vec![0u8; HASH_SIZE as usize];
+                        label.copy_from_slice(&data[idx * HASH_SIZE as usize..(idx + 1) * HASH_SIZE as usize]);
+                        proof_guard.proofs[(fidx - left) as usize].push(MhtProof {
+                            paths: path_proof.path,
+                            locs: path_proof.locs,
+                            index: challenge as expanders::NodeType,
+                            label,
+                        });
+                    }
+                }
+                Ok(())
+            });
+            tasks.push(task);
+        }
+        for (i, task) in tasks.into_iter().enumerate() {
+            task.await
+                .context("prove space error")
+                .map(|e| anyhow!("prove space task index {} error: {:?}", i, e))?;
+        }
+
+        proof.write().await.wit_chains = self
+            .rw
+            .write()
+            .await
+            .chain_state
+            .acc
+            .as_mut()
+            .unwrap()
+            .get_witness_chains(indexs.read().await.clone())
+            .await
+            .context("prove space error")?;
+        self.rw.write().await.context.proofed = right - 1;
+
+        Ok(proof)
+    }
+
+    // ProveDeletion sort out num*IdleFileSize(unit MiB) available space,
+    // you need to update prover status with this value rather than num after the verification is successful.
+    pub async fn prove_deletion(&mut self, num: i64) -> Result<DeletionProof> {
+        if num <= 0 {
+            bail!("prove deletion error: bad file number");
+        }
+        let mut prove_guard = self.rw.write().await;
+
+        if prove_guard.rear - prove_guard.front < num {
+            bail!("prove deletion error: insufficient operating space");
+        }
+        let mut data = prove_guard.expanders.file_pool.clone();
+        let mut roots: Vec<Vec<u8>> = vec![vec![]; num as usize];
+        let mut aux = vec![0u8; DEFAULT_AUX_SIZE as usize * tree::DEFAULT_HASH_SIZE as usize];
+        let mut mht = tree::get_light_mht(DEFAULT_AUX_SIZE);
+        for i in 1..num {
+            let cluster = (prove_guard.front + i - 1) / prove_guard.cluster_size + 1;
+            let subfile = (prove_guard.front + i - 1) % prove_guard.cluster_size;
+
+            self.read_file_labels(cluster, subfile, &mut data)
+                .await
+                .context("prove deletion error")?;
+            self.read_aux_data(cluster, subfile, &mut aux)
+                .await
+                .context("prove deletion error")?;
+
+            tree::calc_light_mht_with_aux(&mut mht, &aux);
+            roots[i as usize - 1] = tree::get_root(&mht);
+        }
+        let (wit_chain, acc_path) = prove_guard
+            .acc_manager
+            .as_mut()
+            .unwrap()
+            .delete_elements_and_proof(num)
+            .await
+            .context("prove deletion error")?;
+
+        let proof = DeletionProof { roots, wit_chain, acc_path };
+
+        Ok(proof)
+    }
+
+    pub async fn organize_files(&mut self, idx: i64, num: i64) -> Result<()> {
+        let cluster_size = self.rw.read().await.cluster_size;
+        let set_len = self.rw.read().await.set_len;
+        let k = self.rw.read().await.expanders.k;
+
+        let dir = Path::new(IDLE_FILE_PATH).join(format!("{}-{}", SET_DIR_NAME, idx / (cluster_size * set_len) + 1));
+
+        let mut i = idx + 1;
+        while i <= idx + num {
+            for j in 0..k {
+                // delete idle file
+                let name = dir
+                    .join(format!("{}-{}", CLUSTER_DIR_NAME, (i - 1) / cluster_size + 1))
+                    .join(format!("{}-{}", FILE_NAME, j));
+                util::delete_file(name.to_str().unwrap())?;
+
+                // delete aux file
+                let name = dir
+                    .join(format!("{}-{}", CLUSTER_DIR_NAME, (i - 1) / cluster_size + 1))
+                    .join(format!("{}-{}", AUX_FILE, j));
+                util::delete_file(name.to_str().unwrap())?;
+            }
+            i += 8;
+        }
+        let name = dir.join(COMMIT_FILE);
+        util::delete_file(name.to_str().unwrap())?;
+
+        self.rw.write().await.space += num / cluster_size * k * FILE_SIZE;
+
+        Ok(())
+    }
+
+    pub async fn delete_files(&mut self) -> Result<()> {
+        // // delete all files before front
+        let prove_guard = self.rw.read().await;
+        let mut indexs: Vec<i64> = vec![];
+        indexs.push((prove_guard.front - 1) / (prove_guard.set_len * prove_guard.cluster_size) + 1); //idle-files-i
+        indexs.push((prove_guard.front - 1) / prove_guard.cluster_size + 1); //file-cluster-i
+        indexs.push((prove_guard.front - 1) % prove_guard.cluster_size + prove_guard.expanders.k); //sub-file-i
+
+        deleter(IDLE_FILE_PATH, indexs).context("delete idle files error")
+    }
+
+    pub async fn calc_generated_file(&mut self, dir: &str) -> Result<i64> {
+        let mut count = 0_i64;
+        let prover_guard = self.rw.read().await;
+        let file_total_size =
+            prover_guard.config.file_size * (prover_guard.expanders.k + prover_guard.cluster_size) * 1024 * 1024;
+        let root_size = (prover_guard.set_len * (prover_guard.expanders.k + prover_guard.cluster_size) + 1)
+            * (DEFAULT_HASH_SIZE as i64);
+        let mut next = 1_i64;
+
+        let mut files = fs::read_dir(dir).await?;
+        while let Some(file) = files.next_entry().await? {
+            let file_name = file
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow!("failed to convert file name to string"))?;
+            let sidxs = file_name.split("-").collect::<Vec<&str>>();
+            if sidxs.len() < 3 {
+                continue;
+            }
+            let number: i64 = sidxs[2].parse()?;
+            if number != prover_guard.rear / (prover_guard.set_len * prover_guard.cluster_size) + next {
+                continue;
+            }
+            if !file.file_type().await?.is_dir() {
+                continue;
+            }
+            let roots_file = file.path().join(COMMIT_FILE);
+            match fs::metadata(roots_file).await {
+                Ok(metadata) => {
+                    if metadata.len() != root_size as u64 {
+                        continue;
+                    }
+                },
+                Err(_) => continue,
+            }
+
+            let mut clusters = fs::read_dir(file.path()).await?;
+            let mut i = 0;
+            while let Some(cluster) = clusters.next_entry().await? {
+                if !cluster.metadata().await?.is_dir() {
+                    continue;
+                }
+
+                let mut size = 0;
+                let mut files = fs::read_dir(cluster.path()).await?;
+
+                while let Some(file) = files.next_entry().await? {
+                    if !file.metadata().await?.is_dir() && file.metadata().await?.len() >= MINIFILESIZE as u64 {
+                        size += file.metadata().await?.len() as i64;
+                    }
+                }
+                if size == file_total_size {
+                    count += prover_guard.cluster_size;
+                    i += 1;
+                }
+            }
+            if i == prover_guard.set_len as usize {
+                next += 1;
+            }
+        }
+        Ok(count)
+    }
+}
+
+pub fn deleter(root_dir: &str, indexs: Vec<i64>) -> Result<()> {
+    if indexs.is_empty() {
+        return Ok(());
+    }
+
+    let entries = std::fs::read_dir(root_dir)?;
+
+    for entry in entries {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let names: Vec<&str> = file_name.to_str().unwrap().split('-').collect();
+
+        let idx: i64 = match names[names.len() - 1].parse() {
+            Ok(idx) => idx,
+            Err(_) => continue,
+        };
+
+        if idx < indexs[0] || (idx == indexs[0] && !entry.path().is_dir()) {
+            util::delete_dir(Path::new(root_dir).join(entry.path().to_str().unwrap()).to_str().unwrap())?;
+            continue;
+        }
+
+        if idx != indexs[0] {
+            continue;
+        }
+
+        // Recursive call
+        if let Err(e) = deleter(entry.path().to_str().unwrap(), indexs[1..].to_vec()) {
+            return Err(e);
+        }
+    }
+
+    Ok(())
 }
