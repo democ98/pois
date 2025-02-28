@@ -84,8 +84,6 @@ async fn main() -> Result<()> {
         .commit_challenges(&id)
         .context("generate commit challenges error")?;
 
-    println!("commit challenges: {:#?}", chals.clone());
-
     //prove commit and acc
     ts = tokio::time::Instant::now();
     let (commit_proofs, acc_proof) = prover

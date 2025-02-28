@@ -92,7 +92,6 @@ pub fn read_file_to_buf(path: &Path, buf: &mut [u8]) -> Result<()> {
     }
     let mut file = fs::File::open(path)?;
     let bytes_read = file.read(buf)?;
-    println!("bytes_read: {}", bytes_read);
     if bytes_read != buf.len() {
         bail!("byte number read does not match")
     }

@@ -84,7 +84,7 @@ pub fn get_path_proof(mht: &LightMHT, data: &mut [u8], index: i64, size: i64, ha
             d = data[((index - 1) * size) as usize..(index * size) as usize].to_vec();
         } else {
             loc = 1;
-            d = data[((index + 1) * size) as usize..(index + 2) as usize].to_vec();
+            d = data[((index + 1) * size) as usize..((index + 2) * size) as usize].to_vec();
         }
         if i == 0 && (size != DEFAULT_HASH_SIZE as i64 || !hashed) {
             let mut hasher = Sha256::new();
