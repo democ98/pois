@@ -197,7 +197,7 @@ impl Expanders {
                     &Path::new(set_dir.as_str())
                         .join(format!("{}-{}", CLUSTER_DIR_NAME, clusters[j as usize]))
                         .join(format!("{}-{}", FILE_NAME, i)),
-                    &label,
+                    &labels,
                 )?;
             }
         }
