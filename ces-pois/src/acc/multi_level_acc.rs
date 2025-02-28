@@ -88,6 +88,7 @@ impl Default for MutiLevelAcc {
 
 pub async fn recovery(acc_path: &str, key: RsaKey, front: i64, rear: i64) -> Result<MutiLevelAcc> {
     let acc_path = if acc_path.is_empty() { DEFAULT_PATH } else { acc_path };
+
     if !std::path::Path::new(&acc_path).exists() {
         fs::create_dir_all(&acc_path)
             .await
@@ -345,6 +346,7 @@ impl MutiLevelAcc {
         }
         new_snapshot.deleted = self.deleted;
         new_snapshot.file_path = self.file_path.clone();
+        self.snapshot = Some(Arc::new(RwLock::new(new_snapshot)));
     }
 
     // pub async fn set_update(&mut self, yes: bool) {}

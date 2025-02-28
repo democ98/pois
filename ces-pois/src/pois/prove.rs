@@ -176,6 +176,7 @@ impl Prover<MutiLevelAcc> {
         let _ = new_muti_level_acc(&prover_guard.config.chall_acc_path, key).await?;
         Ok(())
     }
+
     pub async fn recovery(&mut self, key: RsaKey, front: i64, rear: i64, config: Config) -> Result<()> {
         {
             let mut prover_guard = self.rw.write().await;
@@ -273,7 +274,7 @@ impl Prover<MutiLevelAcc> {
 
         let file_num = prover_guard.set_len * prover_guard.cluster_size;
         let idle_file_path = prover_guard.config.idle_file_path.clone();
-        let free_space = util::get_dir_free_space(&idle_file_path)? / 1024 * 1024;
+        let free_space = util::get_dir_free_space(&idle_file_path).context("get free space error")? / 1024 * 1024;
         let reserved = 256_i64;
 
         if prover_guard.space == file_num * prover_guard.config.file_size
@@ -573,15 +574,13 @@ impl Prover<MutiLevelAcc> {
         &mut self,
         challenges: Vec<Vec<i64>>,
     ) -> Result<(Option<Vec<Vec<CommitProof>>>, Option<AccProof>)> {
-        {
-            let prover_guard = self.rw.read().await;
-            //copy new acc data to challenging acc path
-            let index = prover_guard.rear / DEFAULT_ELEMS_NUM as i64;
-            backup_acc_data_for_chall(ACC_PATH, CHALL_ACC_PATH, index)?;
-        }
-
         let commit_proofs = self.prove_commits(challenges.clone()).await?;
         let acc_proof = self.prove_acc(challenges).await?;
+
+        //copy new acc data to challenging acc path
+        let prover_guard = self.rw.read().await;
+        let index = prover_guard.rear / DEFAULT_ELEMS_NUM as i64;
+        backup_acc_data_for_chall(ACC_PATH, CHALL_ACC_PATH, index)?;
 
         Ok((commit_proofs, acc_proof))
     }

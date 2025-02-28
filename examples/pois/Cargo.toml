@@ -1,0 +1,9 @@
+[package]
+name = "example-pois"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+ces-pois = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }

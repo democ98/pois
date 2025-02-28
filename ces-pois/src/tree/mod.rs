@@ -19,11 +19,11 @@ pub fn get_light_mht(e_len: i64) -> LightMHT {
 
 // CalcLightMhtWithBytes calc light weight mht whit fixed size elements data
 pub fn calc_light_mht_with_bytes(mht: &mut LightMHT, data: &[u8], size: i64) {
+    let mut hasher = Sha256::new();
     for i in 0..(data.len() as i64 / size) as usize {
-        let mut hasher = Sha256::new();
         hasher.update(&data[i * size as usize..(i + 1) * size as usize]);
         mht[i * DEFAULT_HASH_SIZE as usize..(i + 1) * DEFAULT_HASH_SIZE as usize]
-            .copy_from_slice(hasher.finalize().as_slice());
+            .copy_from_slice(&hasher.finalize_reset());
     }
     calc_light_mht(mht);
 }

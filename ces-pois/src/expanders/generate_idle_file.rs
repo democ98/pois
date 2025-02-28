@@ -95,10 +95,10 @@ impl Expanders {
         let mut parents = self.file_pool.clone();
         let mut labels = self.file_pool.clone();
         let mut mht = tree::get_light_mht(self.n);
-
         let mut aux = vec![0u8; (DEFAULT_AUX_SIZE * tree::DEFAULT_HASH_SIZE as i64) as usize];
 
         //calc node labels
+        let mut hasher = Sha512::new();
         let front_size = miner_id.len() + std::mem::size_of::<NodeType>() + 8 + 8;
         let mut label = vec![0u8; front_size + 2 * HASH_SIZE as usize];
         util::copy_data(&mut label, &[&miner_id]);
@@ -134,8 +134,7 @@ impl Expanders {
                     .await
                     .context("generate idle file error")?;
                 }
-
-                for k in 0..self.k {
+                for k in 0..self.n {
                     util::copy_data(
                         &mut label[miner_id.len() + 8 + 8..],
                         &[&get_bytes((logical_layer * self.n + k) as NodeType)],
@@ -168,19 +167,17 @@ impl Expanders {
                             );
                         }
                     }
-                    let mut hash_raw_data = label.clone();
+                    hasher.update(&label);
                     if i + j > 0 {
                         //add same layer dependency relationship
-                        hash_raw_data.extend_from_slice(
-                            &labels[(k * HASH_SIZE as i64) as usize..((k + 1) * HASH_SIZE as i64) as usize],
-                        );
+                        hasher.update(&labels[(k * HASH_SIZE as i64) as usize..((k + 1) * HASH_SIZE as i64) as usize]);
                     };
                     labels[(k * HASH_SIZE as i64) as usize..((k + 1) * HASH_SIZE as i64) as usize]
-                        .copy_from_slice(&get_hash(&hash_raw_data));
+                        .copy_from_slice(&hasher.finalize_reset());
                 }
 
                 //calc merkel tree root hash
-                tree::calc_light_mht_with_bytes(&mut mht, &label, HASH_SIZE as i64);
+                tree::calc_light_mht_with_bytes(&mut mht, &labels, HASH_SIZE as i64);
                 roots[(i * size + j) as usize] = tree::get_root(&mht);
                 aux.copy_from_slice(
                     &mht[DEFAULT_AUX_SIZE as usize * tree::DEFAULT_HASH_SIZE as usize

@@ -1,4 +1,5 @@
 use std::{
+    env::current_dir,
     fs,
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
@@ -7,7 +8,7 @@ use std::{
 use crate::acc::{self, RsaKey};
 use anyhow::{anyhow, bail, Context, Result};
 use num_bigint_dig::BigUint;
-use sysinfo::{DiskExt, System, SystemExt};
+use sysinfo::Disks;
 
 pub fn save_proof_file(path: &Path, data: &[Vec<u8>]) -> Result<()> {
     let f = fs::File::create(path).context("save proof file error")?;
@@ -25,14 +26,22 @@ pub fn save_proof_file(path: &Path, data: &[Vec<u8>]) -> Result<()> {
 }
 
 pub fn get_dir_free_space(dir: &str) -> Result<u64> {
-    let system = System::new_all();
-    let disk = system
-        .disks()
-        .iter()
-        .find(|d| d.mount_point().eq(Path::new(dir)))
-        .ok_or_else(|| anyhow!("Directory not found"))?
-        .available_space();
-    Ok(disk)
+    let current_dir = current_dir()?;
+    let mut dir = Path::new(dir);
+    let joined_dir = current_dir.join(dir);
+
+    dir = if dir.is_absolute() { dir } else { &joined_dir };
+
+    let disks = Disks::new_with_refreshed_list();
+    let mut available_space = 0;
+
+    for disk in disks.list() {
+        if dir.starts_with(disk.mount_point().to_path_buf()) {
+            available_space = disk.available_space();
+            break;
+        }
+    }
+    Ok(available_space)
 }
 
 pub fn read_proof_file(path: &Path, num: usize, len: usize) -> Result<Vec<Vec<u8>>> {
@@ -83,6 +92,7 @@ pub fn read_file_to_buf(path: &Path, buf: &mut [u8]) -> Result<()> {
     }
     let mut file = fs::File::open(path)?;
     let bytes_read = file.read(buf)?;
+    println!("bytes_read: {}", bytes_read);
     if bytes_read != buf.len() {
         bail!("byte number read does not match")
     }
@@ -145,9 +155,12 @@ pub fn copy_files(src: &str, dst: &str) -> Result<()> {
         fs::remove_dir_all(dst)?;
     }
 
+    println!("111111111111111111111111111,{:?}", dst);
     fs::create_dir_all(dst)?;
+    println!("22222222222222222222222222,{:?}", src);
 
     let files = fs::read_dir(src)?;
+    println!("33333333333333333333333333333");
 
     //check file in src directory is folder or not , if is folder then continue, otherwise open the file and copy on into det directory
     for file in files {
