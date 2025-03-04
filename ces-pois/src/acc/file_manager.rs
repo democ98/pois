@@ -60,13 +60,13 @@ pub fn clean_backup(dir: &str, index: i64) -> Result<()> {
 pub fn backup_acc_data(dir: &str, index: i64) -> Result<()> {
     let fpath = format!("{}/{}-{}", dir, DEFAULT_NAME, index);
     let backup = format!("{}/{}-{}", dir, DEFAULT_BACKUP_NAME, index);
-    util::copy_files(&fpath, &backup).context("backup element data error")
+    util::copy_file(&fpath, &backup).context("backup element data error")
 }
 
 pub fn backup_acc_data_for_chall(src: &str, des: &str, index: i64) -> Result<()> {
     let fpath = Path::new(src).join(format!("{}-{}", DEFAULT_NAME, index));
     let backup = Path::new(des).join(format!("{}-{}", DEFAULT_NAME, index));
-    util::copy_files(fpath.to_str().unwrap(), backup.to_str().unwrap())
+    util::copy_file(fpath.to_str().unwrap(), backup.to_str().unwrap())
         .context("backup acc data for challenge error")?;
     Ok(())
 }

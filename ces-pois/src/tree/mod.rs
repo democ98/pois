@@ -67,7 +67,7 @@ pub fn get_root(mht: &LightMHT) -> Vec<u8> {
     root
 }
 
-pub fn get_path_proof(mht: &LightMHT, data: &mut [u8], index: i64, size: i64, hashed: bool) -> Result<(PathProof)> {
+pub fn get_path_proof(mht: &LightMHT, data: &[u8], index: i64, size: i64, hashed: bool) -> Result<PathProof> {
     let mut size = size;
     let mut index = index;
     let deep = f64::log2(data.len() as f64 / size as f64) as i64;
@@ -76,7 +76,7 @@ pub fn get_path_proof(mht: &LightMHT, data: &mut [u8], index: i64, size: i64, ha
     let mut d = Vec::new();
     let mut num = mht.len();
     let mut p = mht.len();
-    // let mut data = data;
+    let mut data = data.to_vec().clone();
 
     for i in 0..deep {
         if (index + 1) % 2 == 0 {
@@ -99,7 +99,7 @@ pub fn get_path_proof(mht: &LightMHT, data: &mut [u8], index: i64, size: i64, ha
         num = num / 2;
         index = index / 2;
         p -= num;
-        data.copy_from_slice(&mht[p..p + num]);
+        data = mht[p..p + num].to_vec();
     }
     Ok(proof)
 }
@@ -110,8 +110,7 @@ pub fn get_path_proof_with_aux(data: &mut Vec<u8>, aux: &mut Vec<u8>, index: usi
     let plate_size = data.len() / size / aux_size;
     let mut mht = vec![0u8; plate_size * DEFAULT_HASH_SIZE as usize];
     let left = index / plate_size;
-    data.drain(0..left * plate_size * size);
-    data.drain(left * plate_size * size..);
+    let data = &mut data[left * plate_size * size..(left + 1) * plate_size * size].to_vec().clone();
 
     for i in 0..plate_size {
         let mut hasher = Sha256::new();
@@ -119,15 +118,19 @@ pub fn get_path_proof_with_aux(data: &mut Vec<u8>, aux: &mut Vec<u8>, index: usi
         mht[i * DEFAULT_HASH_SIZE as usize..(i + 1) * DEFAULT_HASH_SIZE as usize]
             .copy_from_slice(hasher.finalize().as_slice());
     }
-    calc_light_mht(&mut mht);
 
-    let sub_proof = get_path_proof(&mht, data, (index % plate_size) as i64, size as i64, false)?;
+    calc_light_mht(&mut mht);
+    let mut sub_proof = get_path_proof(&mht, data, (index % plate_size) as i64, size as i64, false)?;
+
     mht = vec![0u8; aux.len()];
     mht.copy_from_slice(&aux);
     calc_light_mht(&mut mht);
     let top_proof = get_path_proof(&mht, aux, left as i64, DEFAULT_HASH_SIZE as i64, true)?;
-    proof.locs.extend_from_slice(&top_proof.locs);
-    proof.path.extend_from_slice(&top_proof.path);
+
+    sub_proof.locs.extend_from_slice(&top_proof.locs);
+    sub_proof.path.extend_from_slice(&top_proof.path);
+    proof.locs = sub_proof.locs;
+    proof.path = sub_proof.path;
 
     Ok(proof)
 }

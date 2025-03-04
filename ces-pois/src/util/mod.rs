@@ -154,12 +154,9 @@ pub fn copy_files(src: &str, dst: &str) -> Result<()> {
         fs::remove_dir_all(dst)?;
     }
 
-    println!("111111111111111111111111111,{:?}", dst);
     fs::create_dir_all(dst)?;
-    println!("22222222222222222222222222,{:?}", src);
 
     let files = fs::read_dir(src)?;
-    println!("33333333333333333333333333333");
 
     //check file in src directory is folder or not , if is folder then continue, otherwise open the file and copy on into det directory
     for file in files {
@@ -182,5 +179,14 @@ pub fn copy_files(src: &str, dst: &str) -> Result<()> {
 
     fs::copy(src, dst)?;
 
+    Ok(())
+}
+
+pub fn copy_file(src: &str, des: &str) -> Result<()> {
+    let mut df = fs::File::create(des)?;
+    let mut sf = fs::File::open(src)?;
+
+    std::io::copy(&mut sf, &mut df)?;
+    df.flush()?;
     Ok(())
 }

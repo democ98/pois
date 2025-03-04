@@ -768,10 +768,8 @@ impl Prover<MutiLevelAcc> {
         let mut aux: Vec<u8> = vec![0u8; DEFAULT_AUX_SIZE as usize * DEFAULT_HASH_SIZE as usize];
 
         //add neighbor node dependency
-        proof.elders = vec![
-            MhtProof::default();
-            (subfile / prover_guard.expanders.k) as usize * (prover_guard.expanders.k / 2 + 1) as usize
-        ];
+        proof.elders =
+            vec![MhtProof::default(); (subfile / prover_guard.expanders.k * prover_guard.expanders.k / 2) as usize + 1];
 
         if !neighbor.eq(Path::new("")) {
             util::read_file_to_buf(&neighbor, &mut pdata).context("generate commit proof error")?;
@@ -832,10 +830,10 @@ impl Prover<MutiLevelAcc> {
 
             if node.parents[i] as i64 >= subfile * prover_guard.expanders.n {
                 label.copy_from_slice(&data[index * HASH_SIZE as usize..(index + 1) * HASH_SIZE as usize]);
-                path_proof = get_path_proof(&node_tree, &mut data, index as i64, HASH_SIZE as i64, false)?;
+                path_proof = get_path_proof(&node_tree, &data, index as i64, HASH_SIZE as i64, false)?;
             } else {
                 label.copy_from_slice(&pdata[index * HASH_SIZE as usize..(index + 1) * HASH_SIZE as usize]);
-                path_proof = get_path_proof(&parent_tree, &mut pdata, index as i64, HASH_SIZE as i64, false)?;
+                path_proof = get_path_proof(&parent_tree, &pdata, index as i64, HASH_SIZE as i64, false)?;
             }
             if node.parents[i] % 6 != 0 {
                 path_proof.path = Vec::new();

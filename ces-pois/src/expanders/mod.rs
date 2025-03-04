@@ -48,23 +48,26 @@ impl Node {
         if self.index == parent {
             return false;
         }
-        if self.parents.is_empty() || self.parents.len() >= self.parents.capacity() {
+
+        if self.parents.len() >= self.parents.capacity() {
             return false;
         }
 
-        let (i, ok) = self.parent_in_list(parent);
-        if ok {
+        let (insert_pos, found) = self.parent_in_list(parent);
+        if found {
             return false;
         }
+
         self.parents.push(0);
         let lens = self.parents.len();
-        if lens == 1 || i == lens as i32 - 1 {
-            self.parents[i as usize] = parent;
+
+        if lens == 1 || insert_pos as usize == lens - 1 {
+            self.parents[insert_pos as usize] = parent;
             return true;
         }
-        self.parents.copy_within(i as usize + 1..lens - 1, i as usize);
-        self.parents[i as usize] = parent;
 
+        self.parents.copy_within(insert_pos as usize..lens - 1, insert_pos as usize + 1);
+        self.parents[insert_pos as usize] = parent;
         true
     }
 
