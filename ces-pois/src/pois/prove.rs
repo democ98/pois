@@ -756,7 +756,7 @@ impl Prover<MutiLevelAcc> {
         let index = c % prover_guard.expanders.n;
 
         let path_proof = self
-            .generate_path_proof(&mut node_tree, &mut data, index, index)
+            .generate_path_proof(&mut node_tree, &mut data, index, c)
             .await
             .context("generate commit proof error")?;
 
@@ -788,7 +788,7 @@ impl Prover<MutiLevelAcc> {
 
         //file remapping
         let layer = subfile;
-        if subfile > prover_guard.expanders.k {
+        if subfile >= prover_guard.expanders.k {
             let base_layer = (subfile - prover_guard.expanders.k / 2) / prover_guard.expanders.k;
             subfile = prover_guard.expanders.k;
 
@@ -926,7 +926,7 @@ impl Prover<MutiLevelAcc> {
                     for (j, challenge) in challenges.clone().into_iter().enumerate() {
                         let idx = (challenge % p.rw.read().await.expanders.n) as usize;
 
-                        let path_proof = tree::get_path_proof_with_aux(&mut data, &mut aux, idx, HASH_SIZE as usize)?;
+                        let path_proof = tree::get_path_proof_with_aux(&data, &mut aux, idx, HASH_SIZE as usize)?;
                         let mut label = vec![0u8; HASH_SIZE as usize];
                         label.copy_from_slice(&data[idx * HASH_SIZE as usize..(idx + 1) * HASH_SIZE as usize]);
                         proof_guard.proofs[(fidx - left) as usize].push(MhtProof {
