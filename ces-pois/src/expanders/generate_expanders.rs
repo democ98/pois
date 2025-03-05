@@ -23,7 +23,7 @@ pub fn calc_parents(expanders: &Expanders, node: &mut Node, miner_id: &[u8], cou
     hasher.update(miner_id);
     hasher.update(&count.to_be_bytes());
     hasher.update(&rlayer.to_be_bytes());
-    hasher.update(node.index.to_be_bytes());
+    hasher.update((node.index as i64).to_be_bytes());
 
     let mut res = hasher.finalize().to_vec();
 
@@ -34,9 +34,6 @@ pub fn calc_parents(expanders: &Expanders, node: &mut Node, miner_id: &[u8], cou
         res.extend_from_slice(&extra);
     }
 
-    if res.len() < expanders.d as usize {
-        return;
-    }
     res.truncate(expanders.d as usize);
 
     let parent = (node.index - expanders.n as i32) as NodeType;

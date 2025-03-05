@@ -177,7 +177,7 @@ pub fn copy_files(src: &str, dst: &str) -> Result<()> {
         }
     }
 
-    fs::copy(src, dst)?;
+    // fs::copy(src, dst)?;
 
     Ok(())
 }

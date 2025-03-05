@@ -24,3 +24,4 @@ sha2 = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 sysinfo = { workspace = true }
 async-trait = { workspace = true }
+byteorder = { workspace = true }

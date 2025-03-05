@@ -2,6 +2,7 @@ pub mod file_manager;
 pub mod hash_2_prime;
 pub mod multi_level_acc;
 
+use byteorder::{BigEndian, ByteOrder};
 use std::{io::Read, sync::Arc};
 use tokio::task;
 
@@ -44,6 +45,26 @@ pub fn rsa_keygen(lambda: usize) -> RsaKey {
     let g = f.modpow(&BigUint::from(2u32), &n.clone());
 
     RsaKey { n: n.clone(), g }
+}
+
+pub fn get_key_from_bytes(data: Vec<u8>) -> RsaKey {
+    if data.len() < 16 {
+        return rsa_keygen(2048);
+    }
+    let nl = BigEndian::read_u64(&data[0..8]);
+    let gl = BigEndian::read_u64(&data[8..16]);
+
+    if nl == 0 || gl == 0 || data.len() - 16 != (nl + gl) as usize {
+        return rsa_keygen(2048);
+    }
+
+    let n_bytes = &data[16..16 + nl as usize];
+    let g_bytes = &data[16 + nl as usize..];
+
+    let n = BigUint::from_bytes_be(n_bytes);
+    let g = BigUint::from_bytes_be(g_bytes);
+
+    RsaKey { n, g }
 }
 
 pub fn generate_acc(key: &RsaKey, acc: &[u8], elems: Vec<Vec<u8>>) -> Option<Vec<u8>> {

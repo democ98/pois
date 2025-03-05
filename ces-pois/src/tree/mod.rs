@@ -47,13 +47,15 @@ pub fn calc_light_mht(mht: &mut LightMHT) {
         while j >= 0 && k >= 0 {
             let mut hash = Sha256::new();
             hash.update(&src[(k * size) as usize..((k + 2) * size) as usize]);
+
             target[(j * size) as usize..((j + 1) * size) as usize].copy_from_slice(&hash.finalize());
             j = j - 1;
             k = k - 2;
         }
 
         p /= 2;
-        src = target.to_vec();
+        src.truncate(target.len());
+        src.as_mut_slice().clone_from_slice(&target);
     }
 }
 
@@ -104,7 +106,7 @@ pub fn get_path_proof(mht: &LightMHT, data: &[u8], index: i64, size: i64, hashed
     Ok(proof)
 }
 
-pub fn get_path_proof_with_aux(data: &mut Vec<u8>, aux: &mut Vec<u8>, index: usize, size: usize) -> Result<PathProof> {
+pub fn get_path_proof_with_aux(data: &Vec<u8>, aux: &mut Vec<u8>, index: usize, size: usize) -> Result<PathProof> {
     let mut proof = PathProof::default();
     let aux_size = aux.len() / (DEFAULT_HASH_SIZE as usize);
     let plate_size = data.len() / size / aux_size;

@@ -1,3 +1,5 @@
+use std::{fs, io::Read};
+
 use anyhow::{bail, Context, Result};
 use ces_pois::{
     acc::{
@@ -8,6 +10,7 @@ use ces_pois::{
         prove::{self},
         verify::{self, Verifier},
     },
+    util,
 };
 
 #[tokio::main]
@@ -17,18 +20,19 @@ async fn main() -> Result<()> {
     let n = 1024 * 16_i64;
     let d = 64_i64;
 
-    let key = acc::rsa_keygen(2048);
+    // let key = acc::rsa_keygen(2048);
+    let key = parse_key("./key")?;
 
     let id = b"test miner id".to_vec();
     let mut prover = prove::new_prover::<MutiLevelAcc>(k, n, d, id, 256 * 64 * 2 * 4, 32).await?;
-    // prover
-    //     .recovery(key, 0, 0, Config::default())
-    //     .await
-    //     .context("recovery failed")?;
     prover
-        .init(key.clone(), Default::default())
+        .recovery(key.clone(), 0, 0, Default::default())
         .await
-        .context("init prover failed")?;
+        .context("recovery failed")?;
+    // prover
+    //     .init(key.clone(), Default::default())
+    //     .await
+    //     .context("init prover failed")?;
 
     let verifier = Verifier::new(k, n, d);
 
@@ -80,10 +84,10 @@ async fn main() -> Result<()> {
     println!("receive commits time :{}ms", ts.elapsed().as_millis());
 
     //generate commits challenges
-    let chals = verifier
-        .commit_challenges(&id)
-        .context("generate commit challenges error")?;
-
+    // let chals = verifier
+    //     .commit_challenges(&id)
+    //     .context("generate commit challenges error")?;
+    let chals = parse_challenge("./challenge")?;
     //prove commit and acc
     ts = tokio::time::Instant::now();
     let (commit_proofs, acc_proof) = prover
@@ -96,6 +100,12 @@ async fn main() -> Result<()> {
     println!("prove commit time :{}ms", ts.elapsed().as_millis());
 
     //// make commit_proofs and acc_proof to json////
+
+    let commit_proofs_json = serde_json::to_vec(&commit_proofs.clone().unwrap())?;
+    util::save_file(
+        std::path::Path::new("./commit_proof.json"),
+        &commit_proofs_json,
+    )?;
 
     //verify commit proof
     ts = tokio::time::Instant::now();
@@ -111,20 +121,37 @@ async fn main() -> Result<()> {
         .context("verify acc proof error")?;
     println!("verify acc proof time :{}ms", ts.elapsed().as_millis());
 
-    //add file to count
-    ts = tokio::time::Instant::now();
-    prover
-        .update_status(256, false)
-        .await
-        .context("update status error")?;
-    println!("update prover status time :{}ms", ts.elapsed().as_millis());
+    // //add file to count
+    // ts = tokio::time::Instant::now();
+    // prover
+    //     .update_status(256, false)
+    //     .await
+    //     .context("update status error")?;
+    // println!("update prover status time :{}ms", ts.elapsed().as_millis());
 
-    println!(
-        "commit proof updated data: {},{}",
-        prover.get_front().await,
-        prover.get_rear().await
-    );
+    // println!(
+    //     "commit proof updated data: {},{}",
+    //     prover.get_front().await,
+    //     prover.get_rear().await
+    // );
 
     //deletion proof
     Ok(())
+}
+
+fn parse_key(path: &str) -> Result<acc::RsaKey> {
+    let mut f = fs::File::open(path)?;
+    let mut buffer = Vec::new();
+    f.read_to_end(&mut buffer)?;
+    Ok(acc::get_key_from_bytes(buffer))
+}
+
+fn parse_challenge(path: &str) -> Result<Vec<Vec<i64>>> {
+    let mut f = fs::File::open(path)?;
+    let mut buffer = Vec::new();
+    f.read_to_end(&mut buffer)?;
+    let challenge: Vec<Vec<i64>> =
+        serde_json::from_slice(&buffer).context("parse challenge error")?;
+
+    Ok(challenge)
 }

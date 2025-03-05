@@ -108,6 +108,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bigdecimal",
+ "byteorder",
  "dashmap",
  "hex",
  "lazy_static",
@@ -233,6 +234,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ces-pois",
+ "serde_json",
  "tokio",
 ]
 
