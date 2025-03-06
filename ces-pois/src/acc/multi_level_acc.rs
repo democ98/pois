@@ -422,6 +422,7 @@ impl MutiLevelAcc {
                 len: 1,
                 wit: Vec::new(),
             })));
+            self.elem_nums += self.curr_count;
             return;
         }
 
@@ -521,10 +522,19 @@ impl MutiLevelAcc {
             data.values = data.values[num as usize..].to_vec();
             data.wits = generate_witness(self.key.g.clone(), self.key.n.clone(), data.values.clone()).await;
             save_acc_data(&self.file_path, index, data.values.clone(), data.wits.clone())?;
-            self.accs.clone().unwrap().write().await.children[0].write().await.len -= num;
-            let len = self.accs.clone().unwrap().read().await.children[0].read().await.len;
-            self.accs.clone().unwrap().write().await.children[0].write().await.value =
-                generate_acc(&self.key, &data.wits[len as usize - 1], vec![data.values[len as usize - 1].clone()])
+            self.accs.clone().unwrap().write().await.children[0].write().await.children[0]
+                .write()
+                .await
+                .len -= num;
+            let len = self.accs.clone().unwrap().read().await.children[0].read().await.children[0]
+                .read()
+                .await
+                .len;
+            self.accs.clone().unwrap().write().await.children[0].write().await.children[0]
+                .write()
+                .await
+                .value =
+                generate_acc(&self.key, &data.wits[(len - 1) as usize], vec![data.values[(len - 1) as usize].clone()])
                     .unwrap();
         } else {
             delete_acc_data(&self.file_path, index as i32).context("delet elements error")?;
@@ -533,7 +543,9 @@ impl MutiLevelAcc {
             self.accs.clone().unwrap().write().await.children[0].write().await.children =
                 self.accs.clone().unwrap().read().await.children[0].read().await.children[1..].to_vec();
             self.accs.clone().unwrap().write().await.children[0].write().await.len -= 1;
-            if self.accs.clone().unwrap().read().await.children[0].read().await.len == 0 {
+            if self.accs.clone().unwrap().read().await.children[0].read().await.len == 0
+                && self.accs.as_ref().unwrap().read().await.len >= 1
+            {
                 self.accs.clone().unwrap().write().await.children =
                     self.accs.clone().unwrap().read().await.children[1..].to_vec();
                 self.accs.clone().unwrap().write().await.len -= 1;
@@ -553,7 +565,8 @@ impl MutiLevelAcc {
             .clone()
             .write()
             .await
-            .update_acc(&self.key);
+            .update_acc(&self.key)
+            .await;
         // Update parents and top acc
         self.accs.clone().unwrap().write().await.update_acc(&self.key).await;
         self.deleted += num;

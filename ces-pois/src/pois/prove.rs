@@ -969,30 +969,30 @@ impl Prover<MutiLevelAcc> {
         if num <= 0 {
             bail!("prove deletion error: bad file number");
         }
-        let mut prove_guard = self.rw.write().await;
 
-        if prove_guard.rear - prove_guard.front < num {
+        if self.rw.read().await.rear - self.rw.read().await.front < num {
             bail!("prove deletion error: insufficient operating space");
         }
-        let mut data = prove_guard.expanders.file_pool.clone();
+        let mut data = self.rw.read().await.expanders.file_pool.clone();
         let mut roots: Vec<Vec<u8>> = vec![vec![]; num as usize];
         let mut aux = vec![0u8; DEFAULT_AUX_SIZE as usize * tree::DEFAULT_HASH_SIZE as usize];
         let mut mht = tree::get_light_mht(DEFAULT_AUX_SIZE);
         for i in 1..num {
-            let cluster = (prove_guard.front + i - 1) / prove_guard.cluster_size + 1;
-            let subfile = (prove_guard.front + i - 1) % prove_guard.cluster_size;
-
+            let cluster = (self.rw.read().await.front + i - 1) / self.rw.read().await.cluster_size + 1;
+            let subfile = (self.rw.read().await.front + i - 1) % self.rw.read().await.cluster_size;
             self.read_file_labels(cluster, subfile, &mut data)
                 .await
                 .context("prove deletion error")?;
             self.read_aux_data(cluster, subfile, &mut aux)
                 .await
                 .context("prove deletion error")?;
-
             tree::calc_light_mht_with_aux(&mut mht, &aux);
             roots[i as usize - 1] = tree::get_root(&mht);
         }
-        let (wit_chain, acc_path) = prove_guard
+        let (wit_chain, acc_path) = self
+            .rw
+            .write()
+            .await
             .acc_manager
             .as_mut()
             .unwrap()

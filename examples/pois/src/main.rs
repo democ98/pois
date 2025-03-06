@@ -87,7 +87,7 @@ async fn main() -> Result<()> {
     // let chals = verifier
     //     .commit_challenges(&id)
     //     .context("generate commit challenges error")?;
-    let chals = parse_challenge("./challenge")?;
+    let chals = parse_challenge("/home/chiang/code/go_code/src/cess_pois/test/challenge")?;
     //prove commit and acc
     ts = tokio::time::Instant::now();
     let (commit_proofs, acc_proof) = prover
@@ -121,21 +121,28 @@ async fn main() -> Result<()> {
         .context("verify acc proof error")?;
     println!("verify acc proof time :{}ms", ts.elapsed().as_millis());
 
-    // //add file to count
-    // ts = tokio::time::Instant::now();
-    // prover
-    //     .update_status(256, false)
-    //     .await
-    //     .context("update status error")?;
-    // println!("update prover status time :{}ms", ts.elapsed().as_millis());
+    //add file to count
+    ts = tokio::time::Instant::now();
+    prover
+        .update_status(256, false)
+        .await
+        .context("update status error")?;
+    println!("update prover status time :{}ms", ts.elapsed().as_millis());
 
-    // println!(
-    //     "commit proof updated data: {},{}",
-    //     prover.get_front().await,
-    //     prover.get_rear().await
-    // );
+    println!(
+        "commit proof updated data: {},{}",
+        prover.get_front().await,
+        prover.get_rear().await
+    );
 
     //deletion proof
+    ts = tokio::time::Instant::now();
+    let _ = prover
+        .prove_deletion(8)
+        .await
+        .context("prove deletion proof error")?;
+    println!("prove deletion proof time :{}ms", ts.elapsed().as_millis());
+
     Ok(())
 }
 
