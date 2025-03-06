@@ -673,6 +673,8 @@ impl AccNode {
             return;
         }
         gen_wits_for_acc_nodes(&key.g, &key.n, &mut self.children).await;
+        let last = self.children[lens - 1].clone();
+        self.value = generate_acc(key, &last.read().await.wit, vec![last.read().await.value.clone()]).unwrap();
     }
 }
 
