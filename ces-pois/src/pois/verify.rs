@@ -494,11 +494,12 @@ impl Verifier {
                 }
                 let path_proof =
                     PathProof { locs: proof.proofs[i][j].locs.clone(), path: proof.proofs[i][j].paths.clone() };
-
+                //check index
                 if !check_index_path(*v, &path_proof.locs) {
                     let err = anyhow!("verify index path error");
                     bail!("verify space proofs error: {}", err);
                 }
+                //check path proof
                 if !verify_path_proof(&proof.roots[i], &proof.proofs[i][j].label, path_proof) {
                     let err = anyhow!("verify path proof error");
                     bail!("verify space proofs error: {}", err);

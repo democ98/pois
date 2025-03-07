@@ -261,7 +261,13 @@ impl AccHandle for MutiLevelAcc {
                 data = read_acc_data(&self.file_path, fidx as i64)?;
             }
 
-            let chain = snapshot.clone().write().await.get_witness_chain(indexes[i], &data).await?;
+            let chain = snapshot
+                .clone()
+                .write()
+                .await
+                .get_witness_chain(indexes[i], &data, i)
+                .await
+                .context("get witness chains error")?;
             chains.push(chain);
         }
         Ok(chains)
@@ -573,31 +579,35 @@ impl MutiLevelAcc {
         Ok(())
     }
 
-    pub async fn get_witness_chain(&mut self, index: i64, data: &AccData) -> Result<WitnessNode> {
-        let mut idx = (index - (DEFAULT_ELEMS_NUM as i64 - data.values.len() as i64) - 1) % DEFAULT_ELEMS_NUM as i64;
+    pub async fn get_witness_chain(&mut self, index: i64, data: &AccData, tmp: usize) -> Result<WitnessNode> {
+        let idx = (index - (DEFAULT_ELEMS_NUM as i64 - data.values.len() as i64) - 1) % DEFAULT_ELEMS_NUM as i64;
         let index = index - (self.deleted - self.deleted % DEFAULT_ELEMS_NUM as i64);
-        let p = self.accs.clone().unwrap();
+        let mut p = self.accs.clone().unwrap();
         let mut wit = WitnessNode::default();
         let mut i = 0;
 
         for _ in 0..DEFAULT_LEVEL {
-            wit = WitnessNode {
-                elem: p.read().await.value.clone(),
-                wit: p.read().await.wit.clone(),
-                acc: Some(Box::new(wit)),
-            };
+            if i == 0 {
+                wit = WitnessNode { elem: p.read().await.value.clone(), wit: p.read().await.wit.clone(), acc: None };
+            } else {
+                wit = WitnessNode {
+                    elem: p.read().await.value.clone(),
+                    wit: p.read().await.wit.clone(),
+                    acc: Some(Box::new(wit)),
+                };
+            }
 
             let size = (DEFAULT_ELEMS_NUM as f64).powf((DEFAULT_LEVEL - i - 1) as f64) as i64;
-            idx = (index - 1) / size;
+            let mut idx = (index - 1) / size;
             idx = idx % size;
 
             if p.read().await.children.len() < idx as usize + 1 || p.read().await.children.is_empty() {
+                i += 1;
                 continue;
             }
-            let p_guard = p.read().await;
-            let p_child = p_guard.children[idx as usize].clone();
+            let p_child = p.read().await.children[idx as usize].clone();
 
-            self.accs = Some(p_child.clone());
+            p = p_child.clone();
             i += 1;
         }
 
