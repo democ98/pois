@@ -197,13 +197,11 @@ impl AccHandle for MutiLevelAcc {
         //Before deleting elements, get their chain of witness
         let exist = WitnessNode {
             elem: self.accs.clone().unwrap().read().await.children[0].read().await.children[0]
-                .clone()
                 .read()
                 .await
                 .value
                 .clone(),
             wit: self.accs.clone().unwrap().read().await.children[0].read().await.children[0]
-                .clone()
                 .read()
                 .await
                 .wit
@@ -824,7 +822,7 @@ pub fn verify_delete_update(
     let mut p = exist;
     let mut count = 1;
     while p.acc.is_some() {
-        if accs[count - 1].eq(&key.g.to_bytes_be()) {
+        if !accs[count - 1].eq(&key.g.to_bytes_be()) {
             sub_acc = generate_acc(&key, &p.wit, vec![accs[count - 1].clone()]);
         } else {
             sub_acc = Some(p.wit.clone());

@@ -20,11 +20,12 @@ async fn main() -> Result<()> {
     let n = 1024 * 16_i64;
     let d = 64_i64;
 
-    // let key = acc::rsa_keygen(2048);
-    let key = parse_key("./key")?;
+    let key = acc::rsa_keygen(2048);
+    // let key = parse_key("./key")?;
 
     let id = b"test miner id".to_vec();
-    let mut prover = prove::new_prover::<MutiLevelAcc>(k, n, d, id, 256 * 64 * 2 * 4, 32).await?;
+    let mut prover =
+        prove::new_prover::<MutiLevelAcc>(k, n, d, id.clone(), 256 * 64 * 2 * 4, 32).await?;
     prover
         .recovery(key.clone(), 0, 0, Default::default())
         .await
@@ -84,10 +85,10 @@ async fn main() -> Result<()> {
     println!("receive commits time :{}ms", ts.elapsed().as_millis());
 
     //generate commits challenges
-    // let chals = verifier
-    //     .commit_challenges(&id)
-    //     .context("generate commit challenges error")?;
-    let chals = parse_challenge("/home/chiang/code/go_code/src/cess_pois/test/challenge")?;
+    let chals = verifier
+        .commit_challenges(&id)
+        .context("generate commit challenges error")?;
+    // let chals = parse_challenge("./challenge")?;
     //prove commit and acc
     ts = tokio::time::Instant::now();
     let (commit_proofs, acc_proof) = prover
@@ -137,11 +138,65 @@ async fn main() -> Result<()> {
 
     //deletion proof
     ts = tokio::time::Instant::now();
-    let _ = prover
+    let mut del_proof = prover
         .prove_deletion(8)
         .await
         .context("prove deletion proof error")?;
     println!("prove deletion proof time :{}ms", ts.elapsed().as_millis());
+
+    ts = tokio::time::Instant::now();
+    //set space challenge state
+    prover
+        .set_challenge_state(key, verifier.get_node(&id)?.record.unwrap().acc, 0, 256)
+        .await
+        .context("set challenge state error")?;
+    println!("set challenge state time :{}ms", ts.elapsed().as_millis());
+
+    ts = tokio::time::Instant::now();
+    let space_chals = verifier
+        .space_challenges(8)
+        .context("generate space chals error")?;
+    // let space_chals =
+    //     parse_space_challenge("./space-challenge")?;
+    println!("generate space chals time :{}ms", ts.elapsed().as_millis());
+
+    //prove space
+    ts = tokio::time::Instant::now();
+    let space_proof = prover
+        .prove_space(space_chals.clone(), 1, 256 + 1)
+        .await
+        .context("prove space error")?;
+    println!("prove space time :{}ms", ts.elapsed().as_millis());
+
+    //verify space proof
+    ts = tokio::time::Instant::now();
+    verifier
+        .verify_space(
+            &verifier.get_node(&id)?,
+            space_chals,
+            &mut space_proof.write().await.clone(),
+        )
+        .context("verify space proof error")?;
+    println!("verify space proof time :{}ms", ts.elapsed().as_millis());
+    prover.rest_challenge_state().await;
+
+    //verify deletion proof
+    ts = tokio::time::Instant::now();
+    verifier
+        .verify_deletion(&id, &mut del_proof)
+        .context("verify deletion proof error")?;
+    println!("verify deletion proof time :{}ms", ts.elapsed().as_millis());
+
+    //add file to count
+    ts = tokio::time::Instant::now();
+    prover
+        .update_status(del_proof.roots.len() as i64, true)
+        .await
+        .context("update count error")?;
+    println!("update prover status time :{}ms", ts.elapsed().as_millis());
+    ts = tokio::time::Instant::now();
+    prover.delete_files().await.context("delete files error")?;
+    println!("delete files time :{}ms", ts.elapsed().as_millis());
 
     Ok(())
 }
@@ -159,6 +214,16 @@ fn parse_challenge(path: &str) -> Result<Vec<Vec<i64>>> {
     f.read_to_end(&mut buffer)?;
     let challenge: Vec<Vec<i64>> =
         serde_json::from_slice(&buffer).context("parse challenge error")?;
+
+    Ok(challenge)
+}
+
+fn parse_space_challenge(path: &str) -> Result<Vec<i64>> {
+    let mut f = fs::File::open(path)?;
+    let mut buffer = Vec::new();
+    f.read_to_end(&mut buffer)?;
+    let challenge: Vec<i64> =
+        serde_json::from_slice(&buffer).context("parse space challenge error")?;
 
     Ok(challenge)
 }

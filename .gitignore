@@ -1,3 +1,4 @@
 target/
 proofs/
 .vscode/*
+commit_proof.json

@@ -1,12 +1,11 @@
 use std::{
-    fmt::format,
     path::{self, Path},
     vec,
 };
 
 use super::{generate_expanders::calc_parents, get_bytes, Expanders, Node, NodeType};
 use crate::{
-    tree::{self, LightMHT},
+    tree::{self},
     util,
 };
 use anyhow::{Context, Result};
@@ -92,13 +91,11 @@ impl Expanders {
         //create aux slices
         let mut roots = vec![vec![0, 0]; (self.k + file_num) as usize * size as usize + 1];
         let mut elders = self.file_pool.clone();
-        let mut parents = self.file_pool.clone();
         let mut labels = self.file_pool.clone();
         let mut mht = tree::get_light_mht(self.n);
         let mut aux = vec![0u8; (DEFAULT_AUX_SIZE * tree::DEFAULT_HASH_SIZE as i64) as usize];
 
         //calc node labels
-        let mut hasher = Sha512::new();
         let front_size = miner_id.len() + std::mem::size_of::<NodeType>() + 8 + 8;
         let mut label = vec![0u8; front_size + 2 * HASH_SIZE as usize];
         util::copy_data(&mut label, &[&miner_id]);
@@ -107,13 +104,14 @@ impl Expanders {
         for i in 0..(self.k + file_num) {
             let mut logical_layer = i;
             for j in 0..size {
+                let mut parents = Vec::new();
                 util::copy_data(
                     &mut label[miner_id.len()..],
                     &[&get_bytes(clusters[j as usize]), &get_bytes(0 as i64)],
                 );
                 //calc nodes relationship
                 //read parents' label of file j, and fill elder node labels to add files relationship
-                if i > self.k {
+                if i >= self.k {
                     logical_layer = self.k;
                     //When the last level is reached, join the file index
                     util::copy_data(
@@ -135,6 +133,7 @@ impl Expanders {
                     .context("generate idle file error")?;
                 }
                 for k in 0..self.n {
+                    let mut hasher = Sha512::new();
                     util::copy_data(
                         &mut label[miner_id.len() + 8 + 8..],
                         &[&get_bytes((logical_layer * self.n + k) as NodeType)],
@@ -143,7 +142,7 @@ impl Expanders {
                     let node = self.calc_nodes_parents(i, &miner_id, clusters[j as usize], k);
                     if i > 0 && !node.no_parents() {
                         for p in node.parents.iter() {
-                            let idx = *p as i64 - self.n;
+                            let idx = *p as i64 % self.n;
                             let l = idx * HASH_SIZE as i64;
                             let r = (idx + 1) * HASH_SIZE as i64;
                             if (*p as i64) < logical_layer * self.n {
@@ -152,10 +151,10 @@ impl Expanders {
                                     &[&parents[l as usize..r as usize]],
                                 );
                             } else {
-                                let label_tmp = label.clone()[l as usize..r as usize].to_vec();
+                                // let label_tmp = label.clone()[l as usize..r as usize].to_vec();
                                 util::add_data(
                                     &mut label[front_size..front_size + HASH_SIZE as usize],
-                                    &[&label_tmp[l as usize..r as usize]],
+                                    &[&labels[l as usize..r as usize]],
                                 );
                             }
                         }
@@ -202,7 +201,6 @@ impl Expanders {
             }
         }
         //return memory space
-        drop(parents);
         drop(labels);
         drop(elders);
         drop(mht);
@@ -223,7 +221,7 @@ impl Expanders {
 
         let mut node = self.nodes_pool.clone();
         node.index = (j + logical_layer * self.n) as NodeType;
-        node.parents.clear();
+        node.parents = Vec::with_capacity(self.d as usize + 1);
 
         calc_parents(self, &mut node, miner_id, count, layer);
         node
@@ -239,8 +237,8 @@ impl Expanders {
     ) -> Result<()> {
         let base_layer = ((layer - self.k / 2) / self.k) as usize;
         util::clear_data(elders);
-        let mut temp = self.file_pool.clone();
         for l in 0..(self.k / 2) as usize {
+            let mut temp = Vec::new();
             fs::File::open(
                 &path::Path::new(set_dir)
                     .join(format!("{}-{}", CLUSTER_DIR_NAME, clusters[cidx as usize]))

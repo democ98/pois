@@ -34,7 +34,7 @@ impl Expanders {
             size: (k + 1) * n,
             hash_size: 64,
             file_pool: vec![0u8; (n * HASH_SIZE as i64) as usize],
-            nodes_pool: Node { index: 0, parents: vec![0; 0] },
+            nodes_pool: Node { index: 0, parents: Vec::with_capacity(d as usize + 1) },
         }
     }
 }

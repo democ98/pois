@@ -1130,7 +1130,7 @@ pub fn deleter(root_dir: &str, indexs: Vec<i64>) -> Result<()> {
         };
 
         if idx < indexs[0] || (idx == indexs[0] && !entry.path().is_dir()) {
-            util::delete_dir(Path::new(root_dir).join(entry.path().to_str().unwrap()).to_str().unwrap())?;
+            util::delete_file(Path::new(root_dir).join(entry.path().to_str().unwrap()).to_str().unwrap())?;
             continue;
         }
 
