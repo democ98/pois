@@ -8,7 +8,7 @@ use ces_pois::{
     },
     pois::{
         prove::{self},
-        verify::{self, Verifier},
+        verify::Verifier,
     },
     util,
 };
@@ -201,6 +201,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn parse_key(path: &str) -> Result<acc::RsaKey> {
     let mut f = fs::File::open(path)?;
     let mut buffer = Vec::new();
@@ -208,6 +209,7 @@ fn parse_key(path: &str) -> Result<acc::RsaKey> {
     Ok(acc::get_key_from_bytes(buffer))
 }
 
+#[allow(dead_code)]
 fn parse_challenge(path: &str) -> Result<Vec<Vec<i64>>> {
     let mut f = fs::File::open(path)?;
     let mut buffer = Vec::new();
@@ -218,6 +220,7 @@ fn parse_challenge(path: &str) -> Result<Vec<Vec<i64>>> {
     Ok(challenge)
 }
 
+#[allow(dead_code)]
 fn parse_space_challenge(path: &str) -> Result<Vec<i64>> {
     let mut f = fs::File::open(path)?;
     let mut buffer = Vec::new();

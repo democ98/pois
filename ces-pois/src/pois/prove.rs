@@ -14,13 +14,11 @@ use crate::{
         },
         Node, NodeType,
     },
-    pois::prove,
-    tree::{self, get_path_proof, PathProof, DEFAULT_HASH_SIZE},
+    tree::{self, get_path_proof, DEFAULT_HASH_SIZE},
     util,
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext, Result};
 use num_bigint_dig::BigUint;
-use rsa::rand_core::block;
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc, vec};
 use tokio::{fs, sync::RwLock};
@@ -359,7 +357,7 @@ impl Prover<MutiLevelAcc> {
         }
 
         // Wait for all tasks to finish
-        for (i, task) in tasks.into_iter().enumerate() {
+        for (_, task) in tasks.into_iter().enumerate() {
             task.await.context("spawn taks failed")??;
         }
 
@@ -825,16 +823,15 @@ impl Prover<MutiLevelAcc> {
 
         for i in 0..lens {
             let index = node.parents[i] as usize % prover_guard.expanders.n as usize;
-            let mut path_proof = PathProof::default();
             let mut label = vec![0u8; HASH_SIZE as usize];
 
-            if node.parents[i] as i64 >= subfile * prover_guard.expanders.n {
+            let mut path_proof = if node.parents[i] as i64 >= subfile * prover_guard.expanders.n {
                 label.copy_from_slice(&data[index * HASH_SIZE as usize..(index + 1) * HASH_SIZE as usize]);
-                path_proof = get_path_proof(&node_tree, &data, index as i64, HASH_SIZE as i64, false)?;
+                get_path_proof(&node_tree, &data, index as i64, HASH_SIZE as i64, false)?
             } else {
                 label.copy_from_slice(&pdata[index * HASH_SIZE as usize..(index + 1) * HASH_SIZE as usize]);
-                path_proof = get_path_proof(&parent_tree, &pdata, index as i64, HASH_SIZE as i64, false)?;
-            }
+                get_path_proof(&parent_tree, &pdata, index as i64, HASH_SIZE as i64, false)?
+            };
             if node.parents[i] % 6 != 0 {
                 path_proof.path = Vec::new();
                 path_proof.locs = Vec::new();
@@ -923,7 +920,7 @@ impl Prover<MutiLevelAcc> {
                     proof_guard.roots[(fidx - left) as usize] = tree::get_root(&mht);
                     proof_guard.proofs[(fidx - left) as usize] = vec![];
 
-                    for (j, challenge) in challenges.clone().into_iter().enumerate() {
+                    for (_, challenge) in challenges.clone().into_iter().enumerate() {
                         let idx = (challenge % p.rw.read().await.expanders.n) as usize;
 
                         let path_proof = tree::get_path_proof_with_aux(&data, &mut aux, idx, HASH_SIZE as usize)?;

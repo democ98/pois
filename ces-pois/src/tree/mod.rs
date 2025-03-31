@@ -74,20 +74,16 @@ pub fn get_path_proof(mht: &LightMHT, data: &[u8], index: i64, size: i64, hashed
     let mut index = index;
     let deep = f64::log2(data.len() as f64 / size as f64) as i64;
     let mut proof = PathProof { locs: vec![0u8; deep as usize], path: vec![Vec::new(); deep as usize] };
-    let mut loc = 0u8;
-    let mut d = Vec::new();
     let mut num = mht.len();
     let mut p = mht.len();
     let mut data = data.to_vec().clone();
 
     for i in 0..deep {
-        if (index + 1) % 2 == 0 {
-            loc = 0;
-            d = data[((index - 1) * size) as usize..(index * size) as usize].to_vec();
+        let (d, loc) = if (index + 1) % 2 == 0 {
+            (data[((index - 1) * size) as usize..(index * size) as usize].to_vec(), 0)
         } else {
-            loc = 1;
-            d = data[((index + 1) * size) as usize..((index + 2) * size) as usize].to_vec();
-        }
+            (data[((index + 1) * size) as usize..((index + 2) * size) as usize].to_vec(), 1)
+        };
         if i == 0 && (size != DEFAULT_HASH_SIZE as i64 || !hashed) {
             let mut hasher = Sha256::new();
             hasher.update(&d);

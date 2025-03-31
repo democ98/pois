@@ -157,7 +157,7 @@ impl AccHandle for MutiLevelAcc {
         let mut q = self.snapshot.clone().unwrap().read().await.accs.clone();
         while p.is_some() && q.is_some() && count < DEFAULT_LEVEL as usize {
             if p.clone().unwrap().read().await.len > q.clone().unwrap().read().await.len {
-                for i in count..DEFAULT_LEVEL as usize {
+                for _ in count..DEFAULT_LEVEL as usize {
                     exist = WitnessNode { acc: Some(Box::new(exist)), ..Default::default() };
                     exist.elem = self.key.g.to_bytes_be();
                     exist.wit = exist.acc.as_ref().unwrap().elem.clone();
@@ -263,7 +263,7 @@ impl AccHandle for MutiLevelAcc {
                 .clone()
                 .write()
                 .await
-                .get_witness_chain(indexes[i], &data, i)
+                .get_witness_chain(indexes[i], &data)
                 .await
                 .context("get witness chains error")?;
             chains.push(chain);
@@ -369,17 +369,18 @@ impl MutiLevelAcc {
     }
 
     async fn add_elements_internal(&mut self, elems: Vec<Vec<u8>>) -> Result<AccNode> {
-        let mut data = AccData::default();
         let mut node = AccNode::default();
 
-        if self.curr_count > 0 && self.curr_count < DEFAULT_ELEMS_NUM as i64 {
+        let mut data = if self.curr_count > 0 && self.curr_count < DEFAULT_ELEMS_NUM as i64 {
             let index = (self.deleted + self.elem_nums - 1) / DEFAULT_ELEMS_NUM as i64;
-            data = read_acc_data(&self.file_path, index).context("add elements to sub acc error")?;
+            let mut data = read_acc_data(&self.file_path, index).context("add elements to sub acc error")?;
             data.values.extend_from_slice(&elems);
+            data
         } else {
-            data = AccData::default();
+            let mut data = AccData::default();
             data.values = elems.clone();
-        }
+            data
+        };
 
         data.wits = generate_witness(self.key.g.clone(), self.key.n.clone(), data.values.clone()).await;
         node.len = data.values.len() as i64;
@@ -577,7 +578,7 @@ impl MutiLevelAcc {
         Ok(())
     }
 
-    pub async fn get_witness_chain(&mut self, index: i64, data: &AccData, tmp: usize) -> Result<WitnessNode> {
+    pub async fn get_witness_chain(&mut self, index: i64, data: &AccData) -> Result<WitnessNode> {
         let idx = (index - (DEFAULT_ELEMS_NUM as i64 - data.values.len() as i64) - 1) % DEFAULT_ELEMS_NUM as i64;
         let index = index - (self.deleted - self.deleted % DEFAULT_ELEMS_NUM as i64);
         let mut p = self.accs.clone().unwrap();
@@ -638,10 +639,9 @@ impl MutiLevelAcc {
             }
 
             let mut node = AccNode::default();
-            let mut left = 0;
             let right = backup.values.len();
             if i == 0 && (DEFAULT_ELEMS_NUM as i64 - offset as i64) < (right as i64) {
-                left = self.deleted % DEFAULT_ELEMS_NUM as i64 - (DEFAULT_ELEMS_NUM as i64 - right as i64); //sub real file offset
+                let left = self.deleted % DEFAULT_ELEMS_NUM as i64 - (DEFAULT_ELEMS_NUM as i64 - right as i64); //sub real file offset
                 backup.values = backup.values[left as usize..right].to_vec();
                 backup.wits = generate_witness(self.key.g.clone(), self.key.n.clone(), backup.values.clone()).await;
 

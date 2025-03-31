@@ -3,7 +3,7 @@ pub mod hash_2_prime;
 pub mod multi_level_acc;
 
 use byteorder::{BigEndian, ByteOrder};
-use std::{io::Read, sync::Arc};
+use std::sync::Arc;
 use tokio::task;
 
 use multi_level_acc::AccNode;
